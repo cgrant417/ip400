@@ -1,0 +1,13 @@
+# Build artifacts
+*.o
+Ip400Tun
+
+# Editor files
+*.swp
+*~
+.*.sw?
+
+# Debug files
+*.dSYM/
+*.su
+.gdb_history
