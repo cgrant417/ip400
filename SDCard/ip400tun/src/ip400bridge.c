@@ -215,11 +215,17 @@ BOOL ip_to_ip400(uint8_t *ip_packet, uint16_t ip_len, SPI_BUFFER *spi_frame)
 
     if(bridge_config.debug & DEBUG_BRIDGE) {
         struct in_addr src_ip, dst_ip;
+        char src_str[INET_ADDRSTRLEN], dst_str[INET_ADDRSTRLEN];
+
         src_ip.s_addr = ip_hdr->ip_src.s_addr;
         dst_ip.s_addr = ip_hdr->ip_dst.s_addr;
 
+        // Must copy strings since inet_ntoa uses static buffer
+        strncpy(src_str, inet_ntoa(src_ip), INET_ADDRSTRLEN);
+        strncpy(dst_str, inet_ntoa(dst_ip), INET_ADDRSTRLEN);
+
         logger(LOG_DEBUG, "Encapsulated: %s -> %s (%d bytes) to %s:%d\n",
-               inet_ntoa(src_ip), inet_ntoa(dst_ip), ip_len,
+               src_str, dst_str, ip_len,
                dest_call, dest_port);
     }
 
@@ -262,11 +268,17 @@ BOOL ip400_to_ip(SPI_BUFFER *spi_frame, uint8_t *ip_packet, uint16_t *ip_len)
     if(bridge_config.debug & DEBUG_BRIDGE) {
         struct ip *ip_hdr = (struct ip *)ip_packet;
         struct in_addr src_ip, dst_ip;
+        char src_str[INET_ADDRSTRLEN], dst_str[INET_ADDRSTRLEN];
+
         src_ip.s_addr = ip_hdr->ip_src.s_addr;
         dst_ip.s_addr = ip_hdr->ip_dst.s_addr;
 
+        // Must copy strings since inet_ntoa uses static buffer
+        strncpy(src_str, inet_ntoa(src_ip), INET_ADDRSTRLEN);
+        strncpy(dst_str, inet_ntoa(dst_ip), INET_ADDRSTRLEN);
+
         logger(LOG_DEBUG, "Extracted: %s -> %s (%d bytes) from %s:%d\n",
-               inet_ntoa(src_ip), inet_ntoa(dst_ip), payload_len,
+               src_str, dst_str, payload_len,
                src_call, src_port);
     }
 
