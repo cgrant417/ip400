@@ -198,10 +198,12 @@ BOOL ip_to_ip400(uint8_t *ip_packet, uint16_t ip_len, SPI_BUFFER *spi_frame)
     spi_frame->spiData.hdr.fromPort[1] = bridge_config.my_port & 0xFF;
 
     // Encode destination callsign
-    callEncode(dest_call, dest_port, &temp_frame, DEST_CALLSIGN, 0);
+    // Use IP_BROADCAST (0xFFFF) for VPN so any node with matching callsign accepts it
+    uint16_t broadcast_vpn = 0xFFFF;
+    callEncode(dest_call, broadcast_vpn, &temp_frame, DEST_CALLSIGN, 0);
     memcpy(spi_frame->spiData.hdr.toCall, temp_frame.dest.callbytes.bytes, N_CALL);
-    spi_frame->spiData.hdr.toPort[0] = (dest_port >> 8) & 0xFF;
-    spi_frame->spiData.hdr.toPort[1] = dest_port & 0xFF;
+    spi_frame->spiData.hdr.toPort[0] = (broadcast_vpn >> 8) & 0xFF;
+    spi_frame->spiData.hdr.toPort[1] = broadcast_vpn & 0xFF;
 
     // Set packet type
     spi_frame->spiData.hdr.coding = IP_ENCAPSULATED;
