@@ -227,6 +227,16 @@ int ip_to_ip400(uint8_t *ip_packet, uint16_t ip_len, SPI_BUFFER *spi_frame)
             if(bridge_config.debug & DEBUG_BRIDGE) {
                 logger(LOG_DEBUG, "Gateway %s not found in beacon table (packet dropped)\n",
                        bridge_config.gateway_call);
+                // Debug: show what we're comparing
+                logger(LOG_DEBUG, "  Looking for: '%s' (len=%d)\n",
+                       bridge_config.gateway_call, (int)strlen(bridge_config.gateway_call));
+                // Debug: dump beacon table
+                BEACON_ENTRY *debug_entry;
+                int i = 0;
+                for(debug_entry = beacon_table; debug_entry != NULL; debug_entry = debug_entry->next) {
+                    logger(LOG_DEBUG, "  Beacon[%d]: '%s' (len=%d) VPN=0x%04X\n",
+                           i++, debug_entry->callsign, (int)strlen(debug_entry->callsign), debug_entry->vpn);
+                }
             }
             return 0;
         }
