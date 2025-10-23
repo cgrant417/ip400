@@ -162,8 +162,8 @@ void process_beacon(SPI_BUFFER *spi_frame)
     // Decode source callsign and VPN from beacon
     // Copy encoded callsign bytes
     memcpy(src_call.callbytes.bytes, spi_frame->spiData.hdr.fromCall, N_CALL);
-    // Copy VPN from fromPort field (2 bytes, big-endian)
-    src_call.port = (spi_frame->spiData.hdr.fromPort[0] << 8) | spi_frame->spiData.hdr.fromPort[1];
+    // Copy VPN from fromPort field (2 bytes, little-endian - STM32 native byte order)
+    src_call.port = (spi_frame->spiData.hdr.fromPort[1] << 8) | spi_frame->spiData.hdr.fromPort[0];
     // Decode to get callsign string and VPN value
     callDecode(&src_call, callsign, &vpn);
 
@@ -254,15 +254,17 @@ int ip_to_ip400(uint8_t *ip_packet, uint16_t ip_len, SPI_BUFFER *spi_frame)
     IP400_FRAME temp_frame;
     callEncode(bridge_config.my_callsign, source_vpn, &temp_frame, SRC_CALLSIGN, 0);
     memcpy(spi_frame->spiData.hdr.fromCall, temp_frame.source.callbytes.bytes, N_CALL);
-    spi_frame->spiData.hdr.fromPort[0] = (source_vpn >> 8) & 0xFF;
-    spi_frame->spiData.hdr.fromPort[1] = source_vpn & 0xFF;
+    // Write VPN in little-endian format (STM32 native byte order)
+    spi_frame->spiData.hdr.fromPort[0] = source_vpn & 0xFF;         // Low byte
+    spi_frame->spiData.hdr.fromPort[1] = (source_vpn >> 8) & 0xFF;  // High byte
 
     // Encode destination callsign with determined VPN
     // (either specific VPN from filter, or 0xFFFF for broadcast to all matching callsigns)
     callEncode(bridge_config.gateway_call, dest_vpn, &temp_frame, DEST_CALLSIGN, 0);
     memcpy(spi_frame->spiData.hdr.toCall, temp_frame.dest.callbytes.bytes, N_CALL);
-    spi_frame->spiData.hdr.toPort[0] = (dest_vpn >> 8) & 0xFF;
-    spi_frame->spiData.hdr.toPort[1] = dest_vpn & 0xFF;
+    // Write VPN in little-endian format (STM32 native byte order)
+    spi_frame->spiData.hdr.toPort[0] = dest_vpn & 0xFF;         // Low byte
+    spi_frame->spiData.hdr.toPort[1] = (dest_vpn >> 8) & 0xFF;  // High byte
 
     // Set packet type
     spi_frame->spiData.hdr.coding = IP_ENCAPSULATED;
@@ -325,7 +327,7 @@ BOOL ip400_to_ip(SPI_BUFFER *spi_frame, uint8_t *ip_packet, uint16_t *ip_len)
     // Decode source callsign for logging
     IP400_CALL temp_call;
     memcpy(temp_call.callbytes.bytes, spi_frame->spiData.hdr.fromCall, N_CALL);
-    temp_call.port = (spi_frame->spiData.hdr.fromPort[0] << 8) | spi_frame->spiData.hdr.fromPort[1];
+    temp_call.port = (spi_frame->spiData.hdr.fromPort[1] << 8) | spi_frame->spiData.hdr.fromPort[0];
     callDecode(&temp_call, src_call, &src_port);
 
     if(bridge_config.debug & DEBUG_BRIDGE) {
