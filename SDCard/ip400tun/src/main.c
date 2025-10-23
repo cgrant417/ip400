@@ -79,14 +79,26 @@ int main(int argc, char *argv[])
 
             // My callsign
             case 'c':
-                strncpy(bridge_config.my_callsign, optarg, MAX_CALL);
-                bridge_config.my_callsign[MAX_CALL] = '\0';
+                {
+                    // Pad to MAX_CALL chars to match decoded beacon callsigns
+                    int len = strlen(optarg);
+                    if(len > MAX_CALL) len = MAX_CALL;
+                    memset(bridge_config.my_callsign, ' ', MAX_CALL);
+                    memcpy(bridge_config.my_callsign, optarg, len);
+                    bridge_config.my_callsign[MAX_CALL] = '\0';
+                }
                 break;
 
             // Gateway callsign (REQUIRED)
             case 'g':
-                strncpy(bridge_config.gateway_call, optarg, MAX_CALL);
-                bridge_config.gateway_call[MAX_CALL] = '\0';
+                {
+                    // Pad to MAX_CALL chars to match decoded beacon callsigns
+                    int len = strlen(optarg);
+                    if(len > MAX_CALL) len = MAX_CALL;
+                    memset(bridge_config.gateway_call, ' ', MAX_CALL);
+                    memcpy(bridge_config.gateway_call, optarg, len);
+                    bridge_config.gateway_call[MAX_CALL] = '\0';
+                }
                 break;
 
             // Gateway VPN filter (optional)
