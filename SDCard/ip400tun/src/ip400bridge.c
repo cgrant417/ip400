@@ -160,8 +160,11 @@ void process_beacon(SPI_BUFFER *spi_frame)
     uint16_t vpn;
 
     // Decode source callsign and VPN from beacon
+    // Copy encoded callsign bytes
     memcpy(src_call.callbytes.bytes, spi_frame->spiData.hdr.fromCall, N_CALL);
+    // Copy VPN from fromPort field (2 bytes, big-endian)
     src_call.port = (spi_frame->spiData.hdr.fromPort[0] << 8) | spi_frame->spiData.hdr.fromPort[1];
+    // Decode to get callsign string and VPN value
     callDecode(&src_call, callsign, &vpn);
 
     // Add to beacon table (RSSI would need to be extracted from payload if available)
