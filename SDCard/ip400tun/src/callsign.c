@@ -26,50 +26,83 @@
 #include "types.h"
 #include "frame.h"
 
+// Radix 40 callsign alphabet (matching STM32 firmware)
+static char alphabet[40] = {
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',  // 0-9
+    ' ', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I',  // 10-19
+    'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S',  // 20-29
+    'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '(', ')', '-'   // 30-39
+};
+
+// Encode a character into the alphabet (matching STM32 firmware)
+static uint32_t alphaEncode(char byte)
+{
+    int i;
+
+    // Convert to uppercase
+    if(byte >= 'a' && byte <= 'z') {
+        byte = byte - 32;
+    }
+
+    // Find in alphabet
+    for(i = 0; i < 40; i++) {
+        if(alphabet[i] == byte) {
+            return i;
+        }
+    }
+    return 10;  // Default to space
+}
+
+// Decode a value back to ASCII (matching STM32 firmware)
+static char alphaDecode(uint32_t alpha)
+{
+    // Numeric 0-9
+    if(alpha <= 9) {
+        return '0' + alpha;
+    }
+
+    // Special cases
+    switch(alpha) {
+        case 10: return ' ';
+        case 37: return '(';
+        case 38: return ')';
+        case 39: return '@';
+        default: return 'A' + (alpha - 11);
+    }
+}
+
 /*
  * Encode a callsign into compressed format
- * Uses simple 6-character packing into 4 bytes
- * This is a simplified version - real implementation uses excess-40 encoding
+ * Uses base-40 encoding matching STM32 firmware
  */
 uint8_t callEncode(char *callsign, uint16_t port, IP400_FRAME *frame, uint8_t dest, uint8_t offset)
 {
     char padded[MAX_CALL+1];
     int i;
+    uint32_t encoded;
     IP400_CALL *target;
 
     // Determine target (source or dest)
     target = (dest == DEST_CALLSIGN) ? &frame->dest : &frame->source;
 
-    // Pad callsign to 6 characters
+    // Pad callsign to 6 characters with spaces
     memset(padded, ' ', MAX_CALL);
     padded[MAX_CALL] = '\0';
 
-    // Copy callsign (uppercase)
+    // Copy callsign (will be uppercased by alphaEncode)
     for(i = 0; i < MAX_CALL && callsign[i] != '\0'; i++) {
-        padded[i] = toupper(callsign[i]);
+        padded[i] = callsign[i];
     }
 
-    // Simple encoding: pack 6 chars into 4 bytes using base-40 encoding
-    // Characters: space, 0-9, A-Z (40 characters total)
-    uint32_t encoded = 0;
-
-    for(i = 0; i < MAX_CALL; i++) {
-        char c = padded[i];
-        int val;
-
-        if(c == ' ') val = 0;
-        else if(c >= '0' && c <= '9') val = 1 + (c - '0');
-        else if(c >= 'A' && c <= 'Z') val = 11 + (c - 'A');
-        else val = 0;  // Invalid char becomes space
-
-        encoded = encoded * 40 + val;
+    // Encode using base-40 (matching STM32 firmware algorithm)
+    encoded = alphaEncode(padded[0]);
+    for(i = 1; i < MAX_CALL; i++) {
+        uint32_t current = alphaEncode(padded[i]);
+        encoded = current + encoded * 40;
     }
 
-    // Store in big-endian format
-    target->callbytes.bytes[0] = (encoded >> 24) & 0xFF;
-    target->callbytes.bytes[1] = (encoded >> 16) & 0xFF;
-    target->callbytes.bytes[2] = (encoded >> 8) & 0xFF;
-    target->callbytes.bytes[3] = encoded & 0xFF;
+    // Store encoded value (native byte order, will be handled by frame structure)
+    target->callbytes.encoded = encoded;
 
     // Store port
     target->port = port;
@@ -78,43 +111,35 @@ uint8_t callEncode(char *callsign, uint16_t port, IP400_FRAME *frame, uint8_t de
 }
 
 /*
- * Decode a compressed callsign
+ * Decode a compressed callsign (matching STM32 firmware)
  */
 BOOL callDecode(IP400_CALL *encCall, char *callsign, uint16_t *port)
 {
+    char tmpBuf[MAX_CALL+1];
+    char *p = tmpBuf;
     uint32_t encoded;
-    char decoded[MAX_CALL+1];
     int i;
 
-    // Extract encoded value (big-endian)
-    encoded = ((uint32_t)encCall->callbytes.bytes[0] << 24) |
-              ((uint32_t)encCall->callbytes.bytes[1] << 16) |
-              ((uint32_t)encCall->callbytes.bytes[2] << 8) |
-              ((uint32_t)encCall->callbytes.bytes[3]);
+    // Get encoded value from structure
+    encoded = encCall->callbytes.encoded;
 
-    // Decode from base-40
-    for(i = MAX_CALL - 1; i >= 0; i--) {
-        int val = encoded % 40;
-        char c;
-
-        if(val == 0) c = ' ';
-        else if(val >= 1 && val <= 10) c = '0' + (val - 1);
-        else if(val >= 11 && val <= 36) c = 'A' + (val - 11);
-        else c = ' ';
-
-        decoded[i] = c;
+    // Decode from base-40 (matching STM32 firmware algorithm)
+    for(i = 0; i < MAX_CALL; i++) {
+        *p++ = alphaDecode(encoded % 40);
         encoded /= 40;
     }
-    decoded[MAX_CALL] = '\0';
+    *p = '\0';
 
-    // Copy to output, trimming trailing spaces
-    strcpy(callsign, decoded);
-    for(i = strlen(callsign) - 1; i >= 0 && callsign[i] == ' '; i--) {
-        callsign[i] = '\0';
+    // Reverse the string (STM32 firmware reverses during decode)
+    for(i = strlen(tmpBuf) - 1; i >= 0; i--) {
+        *callsign++ = tmpBuf[i];
     }
+    *callsign = '\0';
 
     // Extract port
-    *port = encCall->port;
+    if(port != NULL) {
+        *port = encCall->port;
+    }
 
     return TRUE;
 }
