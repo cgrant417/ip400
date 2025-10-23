@@ -136,6 +136,10 @@ BOOL callDecode(IP400_CALL *encCall, char *callsign, uint16_t *port)
     }
     *callsign = '\0';
 
+    // NOTE: Trailing spaces are intentionally left in place.
+    // STM32 firmware CompareToMyCall() pads callsigns and uses strncmp(call, padded, MAX_CALL)
+    // to compare the first 6 characters, so "VE3AC " == "VE3AC " is the expected behavior.
+
     // Extract port
     if(port != NULL) {
         *port = encCall->port;

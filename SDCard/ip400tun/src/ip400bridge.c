@@ -70,8 +70,9 @@ void add_beacon_entry(char *callsign, uint16_t vpn, int16_t rssi)
     BEACON_ENTRY *entry;
 
     // Search for existing entry with same callsign and VPN
+    // Use strncmp(MAX_CALL) to match STM32 firmware callsign comparison behavior
     for(entry = beacon_table; entry != NULL; entry = entry->next) {
-        if(strcmp(entry->callsign, callsign) == 0 && entry->vpn == vpn) {
+        if(strncmp(entry->callsign, callsign, MAX_CALL) == 0 && entry->vpn == vpn) {
             // Update existing entry
             entry->last_seen = uptime_seconds;
             entry->rssi = rssi;
@@ -112,8 +113,8 @@ BEACON_ENTRY *find_beacon_entries(char *callsign, uint16_t vpn_filter)
     BEACON_ENTRY *first_match = NULL;
 
     for(entry = beacon_table; entry != NULL; entry = entry->next) {
-        // Check callsign match
-        if(strcmp(entry->callsign, callsign) != 0) {
+        // Check callsign match (use strncmp to match STM32 firmware behavior)
+        if(strncmp(entry->callsign, callsign, MAX_CALL) != 0) {
             continue;
         }
 
@@ -140,7 +141,8 @@ int count_beacon_entries(char *callsign, uint16_t vpn_filter)
     int count = 0;
 
     for(entry = beacon_table; entry != NULL; entry = entry->next) {
-        if(strcmp(entry->callsign, callsign) == 0) {
+        // Use strncmp to match STM32 firmware callsign comparison behavior
+        if(strncmp(entry->callsign, callsign, MAX_CALL) == 0) {
             if(vpn_filter == 0 || entry->vpn == vpn_filter) {
                 count++;
             }
@@ -171,7 +173,8 @@ void process_beacon(SPI_BUFFER *spi_frame)
     add_beacon_entry(callsign, vpn, 0);
 
     // Check if this is our own beacon (auto-detect VPN)
-    if(!bridge_config.vpn_detected && strcmp(callsign, bridge_config.my_callsign) == 0) {
+    // Use strncmp to match STM32 firmware callsign comparison behavior
+    if(!bridge_config.vpn_detected && strncmp(callsign, bridge_config.my_callsign, MAX_CALL) == 0) {
         bridge_config.my_vpn = vpn;
         bridge_config.vpn_detected = TRUE;
         logger(LOG_NOTICE, "Auto-detected my VPN address: 0x%04X\n", vpn);
