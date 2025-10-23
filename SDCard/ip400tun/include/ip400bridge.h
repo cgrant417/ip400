@@ -26,28 +26,39 @@
 #include "spidefs.h"
 #include "frame.h"
 
+// Beacon table entry
+typedef struct beacon_entry_t {
+    char        callsign[MAX_CALL+1];       // Station callsign
+    uint16_t    vpn;                        // VPN address (last 2 bytes of IP)
+    uint32_t    last_seen;                  // Timestamp (seconds since start)
+    int16_t     rssi;                       // Signal strength
+    struct beacon_entry_t *next;            // Next entry in list
+} BEACON_ENTRY;
+
 // Bridge configuration
 typedef struct bridge_config_t {
     char        my_callsign[MAX_CALL+1];    // My amateur radio callsign
-    uint16_t    my_port;                    // My IP400 port (default: ENC_IP_TYPE)
-    char        gateway_call[MAX_CALL+1];   // Gateway callsign (for default route)
-    uint16_t    gateway_port;               // Gateway port
+    uint16_t    my_vpn;                     // My VPN address (auto-detected from STM32)
+    BOOL        vpn_detected;               // TRUE when VPN has been detected
+    char        gateway_call[MAX_CALL+1];   // Gateway callsign (REQUIRED)
+    uint16_t    gateway_vpn_filter;         // Gateway VPN filter (0 = send to all)
+    char        tunnel_ip[20];              // Tunnel IP address (e.g., "10.0.0.1/24")
     uint8_t     debug;                      // Debug flags
 } BRIDGE_CONFIG;
 
 // Bridge initialization
 BOOL bridgeInit(BRIDGE_CONFIG *config);
 
-// IP packet to IP400 frame conversion
-BOOL ip_to_ip400(uint8_t *ip_packet, uint16_t ip_len, SPI_BUFFER *spi_frame);
+// IP packet to IP400 frame conversion (returns number of frames created, 0=error)
+int ip_to_ip400(uint8_t *ip_packet, uint16_t ip_len, SPI_BUFFER *spi_frame);
 
 // IP400 frame to IP packet conversion
 BOOL ip400_to_ip(SPI_BUFFER *spi_frame, uint8_t *ip_packet, uint16_t *ip_len);
 
-// Get destination callsign from IP address (routing table lookup)
-BOOL get_route_for_ip(uint32_t dest_ip, char *dest_call, uint16_t *dest_port);
-
-// Add static route
-BOOL add_static_route(uint32_t dest_ip, uint32_t netmask, char *dest_call, uint16_t dest_port);
+// Beacon table management
+void add_beacon_entry(char *callsign, uint16_t vpn, int16_t rssi);
+BEACON_ENTRY *find_beacon_entries(char *callsign, uint16_t vpn_filter);
+int count_beacon_entries(char *callsign, uint16_t vpn_filter);
+void process_beacon(SPI_BUFFER *spi_frame);
 
 #endif /* IP400BRIDGE_H_ */

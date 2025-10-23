@@ -197,8 +197,10 @@ void tunTask(void)
     nread = tun_read(&tun_config, ip_packet, sizeof(ip_packet));
 
     if(nread > 0) {
-        // Convert IP packet to IP400 SPI frame
-        if(ip_to_ip400(ip_packet, nread, &spi_frame)) {
+        // Convert IP packet to IP400 SPI frame(s) for gateway
+        int frame_count = ip_to_ip400(ip_packet, nread, &spi_frame);
+
+        if(frame_count > 0) {
             // Enqueue for transmission to STM32
             SPI_DATA_FRAME *txFrame;
 
@@ -224,6 +226,8 @@ void tunTask(void)
                     free(txFrame);
                 }
             }
+        } else if(tun_config.debug & DEBUG_TUN) {
+            logger(LOG_DEBUG, "IP packet dropped (no gateway in beacon table)\n");
         }
     }
 }
@@ -236,8 +240,14 @@ BOOL process_ip400_frame(SPI_BUFFER *spi_frame)
     static uint8_t ip_packet[TUN_MAX_PACKET];
     uint16_t ip_len;
 
+    // Check for beacon packets and add to beacon table
+    if(spi_frame->spiData.hdr.coding == 4) {  // BEACON_PACKET
+        process_beacon(spi_frame);  // Updates beacon table and auto-detects VPN
+        return FALSE;  // Don't process beacons further
+    }
+
     // Check if this is an IP encapsulated frame
-    if(spi_frame->spiData.hdr.coding != IP_ENCAPSULATED) {
+    if(spi_frame->spiData.hdr.coding != 5) {  // IP_ENCAPSULATED
         return FALSE;
     }
 

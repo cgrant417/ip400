@@ -27,6 +27,15 @@ The daemon:
 4. Sends to STM32 node via SPI
 5. Receives IP400 frames from STM32, extracts IP packets, writes to TUN
 
+## VPN Address Auto-Detection
+
+**IMPORTANT:** Each STM32 node has a unique VPN address derived from its hardware ID. The ip400tun daemon automatically detects this VPN address by listening for the STM32's beacon transmissions.
+
+- The VPN address is the last 2 bytes of the 172.x.x.x IP address
+- Example: If STM32 VPN is `172.19.198.174`, the VPN bytes are `0xC6AE` (198.174)
+- The TUN interface IP **must match** the STM32's VPN address for proper routing
+- Auto-detection happens within 30 seconds of startup (default beacon interval)
+
 ## Building
 
 ```bash
@@ -83,47 +92,56 @@ sudo ./Ip400Tun -c VE6VH -g VE6ABC -d 0x0F
 
 ## Network Configuration
 
-After starting ip400tun, configure the TUN interface:
+### Step 1: Find Your STM32's VPN Address
 
-```bash
-# Assign IP address to the TUN interface
-sudo ip addr add 172.16.1.10/24 dev ip400
+First, determine your STM32 node's VPN address. Connect to the STM32's serial console (115200 baud) and view the status menu. You'll see something like:
 
-# Bring interface up
-sudo ip link set ip400 up
-
-# Add routes (optional)
-sudo ip route add 172.16.2.0/24 dev ip400
+```
+Radio ID is 8f67f0eda38c3643
+VPN Address 172.19.198.174
+Station Callsign->VE3CA
 ```
 
-### Example Network Setup
+The VPN Address (`172.19.198.174` in this example) is what you'll use for the TUN interface.
 
-If you're setting up a mesh network:
+### Step 2: Start ip400tun and Configure Interface
 
-**Node 1 (VE6ABC):**
+**CRITICAL:** The TUN interface IP **must match** your STM32's VPN address!
+
 ```bash
-sudo ./Ip400Tun -c VE6ABC
-sudo ip addr add 172.16.1.1/24 dev ip400
-sudo ip link set ip400 up
-```
+# Start the daemon (it will auto-detect VPN from beacons)
+sudo ./Ip400Tun -c VE3CA -d 0x01
 
-**Node 2 (VE6VH):**
-```bash
-sudo ./Ip400Tun -c VE6VH -g VE6ABC
-sudo ip addr add 172.16.1.2/24 dev ip400
+# Wait for "Auto-detected VPN address" message in logs
+# Then configure interface with the SAME IP as STM32 VPN
+sudo ip addr add 172.19.198.174/16 dev ip400
 sudo ip link set ip400 up
 ```
 
-**Node 3 (VE6XYZ):**
+### Example Two-Node Setup
+
+**Node 1 (VE3CA) - STM32 VPN: 172.19.198.174:**
 ```bash
-sudo ./Ip400Tun -c VE6XYZ -g VE6ABC
-sudo ip addr add 172.16.1.3/24 dev ip400
+# Terminal 1: Serial console shows VPN is 172.19.198.174
+sudo ./Ip400Tun -c VE3CA -d 0x01
+# Wait for "Auto-detected VPN address: 0xC6AE"
+sudo ip addr add 172.19.198.174/16 dev ip400
 sudo ip link set ip400 up
 ```
 
-Now you can ping between nodes:
+**Node 2 (VE3AC) - STM32 VPN: 172.16.59.240:**
 ```bash
-ping 172.16.1.1   # From VE6VH to VE6ABC
+# Terminal 1: Serial console shows VPN is 172.16.59.240
+sudo ./Ip400Tun -c VE3AC -g VE3CA -d 0x01
+# Wait for "Auto-detected VPN address: 0x3BF0"
+sudo ip addr add 172.16.59.240/16 dev ip400
+sudo ip link set ip400 up
+```
+
+Now you can ping between nodes using their actual VPN addresses:
+```bash
+# From Node 2 to Node 1:
+ping 172.19.198.174
 ```
 
 ## Routing Table

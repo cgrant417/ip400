@@ -34,16 +34,11 @@
 // Global bridge configuration
 static BRIDGE_CONFIG bridge_config;
 
-// Simple routing table entry
-typedef struct route_entry_t {
-    uint32_t    dest_ip;                    // Destination IP (network byte order)
-    uint32_t    netmask;                    // Netmask (network byte order)
-    char        dest_call[MAX_CALL+1];      // Destination callsign
-    uint16_t    dest_port;                  // Destination port
-    struct route_entry_t *next;             // Next entry
-} ROUTE_ENTRY;
+// Beacon table (linked list)
+static BEACON_ENTRY *beacon_table = NULL;
 
-static ROUTE_ENTRY *route_table = NULL;
+// Uptime counter for beacon aging
+static uint32_t uptime_seconds = 0;
 
 // External callsign encoding functions (from ip400spi)
 extern uint8_t callEncode(char *callsign, uint16_t port, IP400_FRAME *frame, uint8_t dest, uint8_t offset);
@@ -56,120 +51,181 @@ BOOL bridgeInit(BRIDGE_CONFIG *config)
 {
     memcpy(&bridge_config, config, sizeof(BRIDGE_CONFIG));
 
-    logger(LOG_NOTICE, "Bridge initialized: MY_CALL=%s, MY_PORT=%d\n",
-           bridge_config.my_callsign, bridge_config.my_port);
+    logger(LOG_NOTICE, "Tunnel initialized: MY_CALL=%s\n", bridge_config.my_callsign);
+    logger(LOG_NOTICE, "Gateway: %s%s\n",
+           bridge_config.gateway_call,
+           bridge_config.gateway_vpn_filter ? " (VPN filtered)" : " (all VPNs)");
+    logger(LOG_NOTICE, "Tunnel IP: %s\n", bridge_config.tunnel_ip);
+    logger(LOG_NOTICE, "Waiting for beacons to populate table...\n");
 
-    if(bridge_config.gateway_call[0]) {
-        logger(LOG_NOTICE, "Default gateway: %s:%d\n",
-               bridge_config.gateway_call, bridge_config.gateway_port);
-
-        // Add default route (0.0.0.0/0)
-        add_static_route(0, 0, bridge_config.gateway_call, bridge_config.gateway_port);
-    }
-
+    uptime_seconds = 0;
     return TRUE;
 }
 
 /*
- * Add a static route to the routing table
+ * Add or update beacon table entry
  */
-BOOL add_static_route(uint32_t dest_ip, uint32_t netmask, char *dest_call, uint16_t dest_port)
+void add_beacon_entry(char *callsign, uint16_t vpn, int16_t rssi)
 {
-    ROUTE_ENTRY *entry;
+    BEACON_ENTRY *entry;
 
-    entry = malloc(sizeof(ROUTE_ENTRY));
+    // Search for existing entry with same callsign and VPN
+    for(entry = beacon_table; entry != NULL; entry = entry->next) {
+        if(strcmp(entry->callsign, callsign) == 0 && entry->vpn == vpn) {
+            // Update existing entry
+            entry->last_seen = uptime_seconds;
+            entry->rssi = rssi;
+            if(bridge_config.debug & DEBUG_BRIDGE) {
+                logger(LOG_DEBUG, "Updated beacon: %s VPN=0x%04X RSSI=%d\n",
+                       callsign, vpn, rssi);
+            }
+            return;
+        }
+    }
+
+    // Create new entry
+    entry = malloc(sizeof(BEACON_ENTRY));
     if(!entry) {
-        logger(LOG_ERROR, "Failed to allocate route entry\n");
-        return FALSE;
+        logger(LOG_ERROR, "Failed to allocate beacon entry\n");
+        return;
     }
 
-    entry->dest_ip = dest_ip;
-    entry->netmask = netmask;
-    strncpy(entry->dest_call, dest_call, MAX_CALL);
-    entry->dest_call[MAX_CALL] = '\0';
-    entry->dest_port = dest_port;
-    entry->next = route_table;
-    route_table = entry;
+    strncpy(entry->callsign, callsign, MAX_CALL);
+    entry->callsign[MAX_CALL] = '\0';
+    entry->vpn = vpn;
+    entry->last_seen = uptime_seconds;
+    entry->rssi = rssi;
+    entry->next = beacon_table;
+    beacon_table = entry;
 
-    struct in_addr ip_addr, mask_addr;
-    ip_addr.s_addr = dest_ip;
-    mask_addr.s_addr = netmask;
-
-    logger(LOG_NOTICE, "Added route: %s/%s -> %s:%d\n",
-           inet_ntoa(ip_addr), inet_ntoa(mask_addr),
-           dest_call, dest_port);
-
-    return TRUE;
+    logger(LOG_NOTICE, "New beacon: %s VPN=0x%04X RSSI=%d\n",
+           callsign, vpn, rssi);
 }
 
 /*
- * Lookup route for destination IP address
- * Returns callsign and port for next hop
+ * Find beacon entries matching callsign and optional VPN filter
+ * Returns first match (caller should iterate via ->next to find all)
  */
-BOOL get_route_for_ip(uint32_t dest_ip, char *dest_call, uint16_t *dest_port)
+BEACON_ENTRY *find_beacon_entries(char *callsign, uint16_t vpn_filter)
 {
-    ROUTE_ENTRY *entry;
-    ROUTE_ENTRY *best_match = NULL;
-    uint32_t best_prefix_len = 0;
+    BEACON_ENTRY *entry;
+    BEACON_ENTRY *first_match = NULL;
 
-    // Find longest prefix match
-    for(entry = route_table; entry != NULL; entry = entry->next) {
-        if((dest_ip & entry->netmask) == (entry->dest_ip & entry->netmask)) {
-            // Count bits in netmask
-            uint32_t prefix_len = __builtin_popcount(ntohl(entry->netmask));
+    for(entry = beacon_table; entry != NULL; entry = entry->next) {
+        // Check callsign match
+        if(strcmp(entry->callsign, callsign) != 0) {
+            continue;
+        }
 
-            if(prefix_len >= best_prefix_len) {
-                best_prefix_len = prefix_len;
-                best_match = entry;
+        // If VPN filter specified, check VPN too
+        if(vpn_filter != 0 && entry->vpn != vpn_filter) {
+            continue;
+        }
+
+        // Match found
+        if(first_match == NULL) {
+            first_match = entry;
+        }
+    }
+
+    return first_match;
+}
+
+/*
+ * Count beacon entries matching callsign and optional VPN filter
+ */
+int count_beacon_entries(char *callsign, uint16_t vpn_filter)
+{
+    BEACON_ENTRY *entry;
+    int count = 0;
+
+    for(entry = beacon_table; entry != NULL; entry = entry->next) {
+        if(strcmp(entry->callsign, callsign) == 0) {
+            if(vpn_filter == 0 || entry->vpn == vpn_filter) {
+                count++;
             }
         }
     }
 
-    if(best_match) {
-        strcpy(dest_call, best_match->dest_call);
-        *dest_port = best_match->dest_port;
-        return TRUE;
-    }
-
-    // No route found
-    struct in_addr ip_addr;
-    ip_addr.s_addr = dest_ip;
-    logger(LOG_DEBUG, "No route to %s\n", inet_ntoa(ip_addr));
-
-    return FALSE;
+    return count;
 }
 
 /*
- * Convert IP packet to IP400 SPI frame
+ * Process received beacon packet
  */
-BOOL ip_to_ip400(uint8_t *ip_packet, uint16_t ip_len, SPI_BUFFER *spi_frame)
+void process_beacon(SPI_BUFFER *spi_frame)
+{
+    IP400_CALL src_call;
+    char callsign[MAX_CALL+1];
+    uint16_t vpn;
+
+    // Decode source callsign and VPN from beacon
+    memcpy(src_call.callbytes.bytes, spi_frame->spiData.hdr.fromCall, N_CALL);
+    src_call.port = (spi_frame->spiData.hdr.fromPort[0] << 8) | spi_frame->spiData.hdr.fromPort[1];
+    callDecode(&src_call, callsign, &vpn);
+
+    // Add to beacon table (RSSI would need to be extracted from payload if available)
+    add_beacon_entry(callsign, vpn, 0);
+
+    // Check if this is our own beacon (auto-detect VPN)
+    if(!bridge_config.vpn_detected && strcmp(callsign, bridge_config.my_callsign) == 0) {
+        bridge_config.my_vpn = vpn;
+        bridge_config.vpn_detected = TRUE;
+        logger(LOG_NOTICE, "Auto-detected my VPN address: 0x%04X\n", vpn);
+    }
+}
+
+/*
+ * Convert IP packet to IP400 SPI frame and send to gateway(s)
+ * This function builds frame(s) with destination = gateway callsign from beacon table
+ * Returns number of frames created (0 = error/no gateway found)
+ */
+int ip_to_ip400(uint8_t *ip_packet, uint16_t ip_len, SPI_BUFFER *spi_frame)
 {
     struct ip *ip_hdr = (struct ip *)ip_packet;
-    char dest_call[MAX_CALL+1];
-    uint16_t dest_port;
+    BEACON_ENTRY *entry;
+    int frame_count = 0;
 
     // Check minimum IP header size
     if(ip_len < sizeof(struct ip)) {
         logger(LOG_ERROR, "IP packet too small: %d bytes\n", ip_len);
-        return FALSE;
+        return 0;
     }
 
     // Check if packet fits in IP400 frame
     if(ip_len > PAYLOAD_MAX) {
         logger(LOG_ERROR, "IP packet too large: %d bytes (max %d)\n", ip_len, PAYLOAD_MAX);
-        return FALSE;
+        return 0;
     }
 
-    // Lookup route for destination IP
-    if(!get_route_for_ip(ip_hdr->ip_dst.s_addr, dest_call, &dest_port)) {
-        // Use gateway if configured
-        if(bridge_config.gateway_call[0]) {
-            strcpy(dest_call, bridge_config.gateway_call);
-            dest_port = bridge_config.gateway_port;
-        } else {
-            logger(LOG_ERROR, "No route and no gateway configured\n");
-            return FALSE;
+    // Determine destination VPN based on filter setting
+    uint16_t dest_vpn;
+
+    if(bridge_config.gateway_vpn_filter != 0) {
+        // VPN filter specified: send to specific VPN only
+        // Verify gateway with this VPN exists in beacon table
+        entry = find_beacon_entries(bridge_config.gateway_call, bridge_config.gateway_vpn_filter);
+        if(!entry) {
+            if(bridge_config.debug & DEBUG_BRIDGE) {
+                logger(LOG_DEBUG, "Gateway %s VPN=0x%04X not found in beacon table (packet dropped)\n",
+                       bridge_config.gateway_call, bridge_config.gateway_vpn_filter);
+            }
+            return 0;
         }
+        dest_vpn = bridge_config.gateway_vpn_filter;
+    } else {
+        // No VPN filter: broadcast to ALL nodes with gateway callsign
+        // Check if ANY gateway exists in beacon table
+        int gateway_count = count_beacon_entries(bridge_config.gateway_call, 0);
+        if(gateway_count == 0) {
+            if(bridge_config.debug & DEBUG_BRIDGE) {
+                logger(LOG_DEBUG, "Gateway %s not found in beacon table (packet dropped)\n",
+                       bridge_config.gateway_call);
+            }
+            return 0;
+        }
+        // Use broadcast VPN so all nodes with matching callsign accept
+        dest_vpn = 0xFFFF;  // IP_BROADCAST
     }
 
     // Build SPI header
@@ -190,20 +246,20 @@ BOOL ip_to_ip400(uint8_t *ip_packet, uint16_t ip_len, SPI_BUFFER *spi_frame)
     spi_frame->spiData.hdr.offset_hi = 0;
     spi_frame->spiData.hdr.offset_lo = 0;
 
-    // Encode source callsign (my callsign)
+    // Encode source callsign (my callsign) with my VPN
+    uint16_t source_vpn = bridge_config.vpn_detected ? bridge_config.my_vpn : 0;
     IP400_FRAME temp_frame;
-    callEncode(bridge_config.my_callsign, bridge_config.my_port, &temp_frame, SRC_CALLSIGN, 0);
+    callEncode(bridge_config.my_callsign, source_vpn, &temp_frame, SRC_CALLSIGN, 0);
     memcpy(spi_frame->spiData.hdr.fromCall, temp_frame.source.callbytes.bytes, N_CALL);
-    spi_frame->spiData.hdr.fromPort[0] = (bridge_config.my_port >> 8) & 0xFF;
-    spi_frame->spiData.hdr.fromPort[1] = bridge_config.my_port & 0xFF;
+    spi_frame->spiData.hdr.fromPort[0] = (source_vpn >> 8) & 0xFF;
+    spi_frame->spiData.hdr.fromPort[1] = source_vpn & 0xFF;
 
-    // Encode destination callsign
-    // Use IP_BROADCAST (0xFFFF) for VPN so any node with matching callsign accepts it
-    uint16_t broadcast_vpn = 0xFFFF;
-    callEncode(dest_call, broadcast_vpn, &temp_frame, DEST_CALLSIGN, 0);
+    // Encode destination callsign with determined VPN
+    // (either specific VPN from filter, or 0xFFFF for broadcast to all matching callsigns)
+    callEncode(bridge_config.gateway_call, dest_vpn, &temp_frame, DEST_CALLSIGN, 0);
     memcpy(spi_frame->spiData.hdr.toCall, temp_frame.dest.callbytes.bytes, N_CALL);
-    spi_frame->spiData.hdr.toPort[0] = (broadcast_vpn >> 8) & 0xFF;
-    spi_frame->spiData.hdr.toPort[1] = broadcast_vpn & 0xFF;
+    spi_frame->spiData.hdr.toPort[0] = (dest_vpn >> 8) & 0xFF;
+    spi_frame->spiData.hdr.toPort[1] = dest_vpn & 0xFF;
 
     // Set packet type
     spi_frame->spiData.hdr.coding = IP_ENCAPSULATED;
@@ -215,6 +271,8 @@ BOOL ip_to_ip400(uint8_t *ip_packet, uint16_t ip_len, SPI_BUFFER *spi_frame)
     // Copy IP packet data
     memcpy(spi_frame->spiData.buffer, ip_packet, ip_len);
 
+    frame_count = 1;
+
     if(bridge_config.debug & DEBUG_BRIDGE) {
         struct in_addr src_ip, dst_ip;
         char src_str[INET_ADDRSTRLEN], dst_str[INET_ADDRSTRLEN];
@@ -222,16 +280,16 @@ BOOL ip_to_ip400(uint8_t *ip_packet, uint16_t ip_len, SPI_BUFFER *spi_frame)
         src_ip.s_addr = ip_hdr->ip_src.s_addr;
         dst_ip.s_addr = ip_hdr->ip_dst.s_addr;
 
-        // Must copy strings since inet_ntoa uses static buffer
         strncpy(src_str, inet_ntoa(src_ip), INET_ADDRSTRLEN);
         strncpy(dst_str, inet_ntoa(dst_ip), INET_ADDRSTRLEN);
 
-        logger(LOG_DEBUG, "Encapsulated: %s -> %s (%d bytes) to %s:%d\n",
+        logger(LOG_DEBUG, "Encapsulated: %s -> %s (%d bytes) to %s VPN=0x%04X%s\n",
                src_str, dst_str, ip_len,
-               dest_call, dest_port);
+               bridge_config.gateway_call, dest_vpn,
+               (dest_vpn == 0xFFFF) ? " (BROADCAST)" : "");
     }
 
-    return TRUE;
+    return frame_count;
 }
 
 /*

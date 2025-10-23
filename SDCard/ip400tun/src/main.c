@@ -60,11 +60,10 @@ int main(int argc, char *argv[])
     strcpy(tunDev, TUN_DEVICE_NAME);
     debugFlag = FALSE;
     memset(&bridge_config, 0, sizeof(bridge_config));
-    bridge_config.my_port = ENC_IP_TYPE;
-    bridge_config.gateway_port = ENC_IP_TYPE;
+    bridge_config.gateway_vpn_filter = 0;  // 0 = send to all matching callsigns
 
     // Parse command line parameters
-    while ((c = getopt(argc, argv, "s:t:c:g:m:d:h")) != -1) {
+    while ((c = getopt(argc, argv, "s:t:c:g:v:i:m:d:h")) != -1) {
 
         switch((char)c) {
 
@@ -84,10 +83,21 @@ int main(int argc, char *argv[])
                 bridge_config.my_callsign[MAX_CALL] = '\0';
                 break;
 
-            // Gateway callsign (default route)
+            // Gateway callsign (REQUIRED)
             case 'g':
                 strncpy(bridge_config.gateway_call, optarg, MAX_CALL);
                 bridge_config.gateway_call[MAX_CALL] = '\0';
+                break;
+
+            // Gateway VPN filter (optional)
+            case 'v':
+                sscanf(optarg, "%hx", &bridge_config.gateway_vpn_filter);
+                break;
+
+            // Tunnel IP address (REQUIRED)
+            case 'i':
+                strncpy(bridge_config.tunnel_ip, optarg, sizeof(bridge_config.tunnel_ip)-1);
+                bridge_config.tunnel_ip[sizeof(bridge_config.tunnel_ip)-1] = '\0';
                 break;
 
             // MTU size
@@ -108,9 +118,21 @@ int main(int argc, char *argv[])
         }
     }
 
-    // Validate callsign
+    // Validate required parameters
     if(!bridge_config.my_callsign[0]) {
         fprintf(stderr, "Error: My callsign (-c) is required\n");
+        show_help(argv[0]);
+        exit(100);
+    }
+
+    if(!bridge_config.gateway_call[0]) {
+        fprintf(stderr, "Error: Gateway callsign (-g) is required\n");
+        show_help(argv[0]);
+        exit(100);
+    }
+
+    if(!bridge_config.tunnel_ip[0]) {
+        fprintf(stderr, "Error: Tunnel IP address (-i) is required\n");
         show_help(argv[0]);
         exit(100);
     }
@@ -184,15 +206,21 @@ void combinedTask(void)
 void show_help(char *name)
 {
     fprintf(stderr,
-            "Usage: %s -c CALLSIGN [options]\n"
+            "Usage: %s -c CALLSIGN -g GATEWAY -i TUNNEL_IP [options]\n"
+            "\n"
+            "IP400 TUN Bridge - Point-to-point tunnel over IP400 mesh network\n"
             "\n"
             "Required:\n"
             "  -c CALLSIGN   Your amateur radio callsign\n"
+            "  -g CALLSIGN   Gateway callsign (remote tunnel endpoint)\n"
+            "  -i IP/MASK    Tunnel IP address (e.g., 10.0.0.1/24)\n"
             "\n"
             "Optional:\n"
+            "  -v VPN        Gateway VPN filter (hex, e.g., 0xC6AE)\n"
+            "                If specified, only send to this specific VPN\n"
+            "                If omitted, send to all gateways with matching callsign\n"
             "  -s DEVICE     SPI device (default: /dev/spidev0.0)\n"
             "  -t NAME       TUN device name (default: ip400)\n"
-            "  -g CALLSIGN   Gateway callsign for default route\n"
             "  -m MTU        MTU size (default: 1500)\n"
             "  -d FLAGS      Debug flags (hex):\n"
             "                  0x01 - Enable logging\n"
@@ -201,12 +229,21 @@ void show_help(char *name)
             "                  0x08 - Bridge debug\n"
             "  -h            Show this help message\n"
             "\n"
-            "Example:\n"
-            "  sudo %s -c VE6VH -g VE6ABC -d 0x01\n"
+            "Examples:\n"
             "\n"
-            "After starting, configure the TUN interface:\n"
-            "  sudo ip addr add 172.16.1.10/24 dev ip400\n"
+            "  # Node 1 (tunnel endpoint A):\n"
+            "  sudo %s -c VE3CA -g VE3AC -i 10.0.0.1/24 -d 0x01\n"
             "  sudo ip link set ip400 up\n"
+            "\n"
+            "  # Node 2 (tunnel endpoint B):\n"
+            "  sudo %s -c VE3AC -g VE3CA -i 10.0.0.2/24 -d 0x01\n"
+            "  sudo ip link set ip400 up\n"
+            "\n"
+            "  # With VPN filter (if multiple VE3CA nodes exist):\n"
+            "  sudo %s -c VE3AC -g VE3CA -v 0xC6AE -i 10.0.0.2/24\n"
+            "\n"
+            "After both endpoints are running, test with:\n"
+            "  ping 10.0.0.1\n"
             "\n",
-            name, name);
+            name, name, name, name);
 }
