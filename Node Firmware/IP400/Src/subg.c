@@ -191,6 +191,7 @@ void QueueTxFrame(IP400_FRAME *txframe)
 int IP4002Buf(IP400_FRAME *tFrame, RAWBUFFER *rawFrame)
 {
 	int frameLen = tFrame->length;
+	RAWBUFFER *rawFrameStart = rawFrame;	// Save start pointer for length calculation
 
 	/*
 	 * Build the raw frame bytes: see IP400_FRAME struct
@@ -229,8 +230,11 @@ int IP4002Buf(IP400_FRAME *tFrame, RAWBUFFER *rawFrame)
 
 	free(tFrame);
 
-	// ensure packet length is a multiple of 4 bytes
-	int pktLen = (rawFrame - rawFrame) + frameLen;
+	// Calculate total packet length: IP400 header + payload
+	// rawFrame has been advanced past all header fields and payload
+	int pktLen = (rawFrame - rawFrameStart) + frameLen;
+
+	// Ensure packet length is a multiple of 4 bytes
 	pktLen += (pktLen % 4);
 
 	return pktLen;
